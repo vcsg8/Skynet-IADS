@@ -336,6 +336,38 @@ samTypesDB = {
 		['can_engage_harm'] = true
 		
 	},
+	['Tor-M2'] = {
+		['type'] = 'single',
+		['searchRadar'] = {
+			['CHAP_TorM2'] = {
+			},
+		},
+		['launchers'] = {
+			['CHAP_TorM2'] = {
+			},
+		},
+		['name'] = {
+			['NATO'] = 'SA-15 Gauntlet (Tor-M2)',
+		},
+		['harm_detection_chance'] = 90,
+		['can_engage_harm'] = true
+	},
+	['Pantsir-S1'] = {
+		['type'] = 'single',
+		['searchRadar'] = {
+			['CHAP_PantsirS1'] = {
+			},
+		},
+		['launchers'] = {
+			['CHAP_PantsirS1'] = {
+			},
+		},
+		['name'] = {
+			['NATO'] = 'SA-22 Greyhound',
+		},
+		['harm_detection_chance'] = 80,
+		['can_engage_harm'] = true
+	},
 	['Gepard'] = {
 		['type'] = 'single',
 		['searchRadar'] = {
@@ -351,6 +383,27 @@ samTypesDB = {
 		},
 		['harm_detection_chance'] = 10
 	},		
+    ['IRIS-T SLM'] = {
+        ['type'] = 'complex',
+        ['searchRadar'] = {
+            ['CHAP_IRISTSLM_STR'] = {
+            },
+        },
+        ['launchers'] = {
+            ['CHAP_IRISTSLM_LN'] = {
+            },
+        },
+        ['misc'] = {
+            ['CHAP_IRISTSLM_CP'] = {
+                ['required'] = true,
+            },
+        },
+        ['name'] = {
+            ['NATO'] = 'IRIS-T SLM',
+        },
+        ['harm_detection_chance'] = 90,
+        ['can_engage_harm'] = true
+    },
     ['Rapier'] = {
         ['searchRadar'] = {
             ['rapier_fsa_blindfire_radar'] = {

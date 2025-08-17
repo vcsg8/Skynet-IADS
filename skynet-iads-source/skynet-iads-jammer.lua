@@ -89,7 +89,14 @@ function SkynetIADSJammer:getSuccessProbability(distanceNauticalMiles, natoName)
 end
 
 function SkynetIADSJammer:getDistanceNMToRadarUnit(radarUnit)
-	return mist.utils.metersToNM(mist.utils.get3DDist(self.emitter:getPosition().p, radarUnit:getPosition().p))
+	if self.emitter and radarUnit then
+		local emitterPos = self.emitter:getPosition()
+		local radarPos = radarUnit:getPosition()
+		if emitterPos and emitterPos.p and radarPos and radarPos.p then
+			return mist.utils.metersToNM(mist.utils.get3DDist(emitterPos.p, radarPos.p))
+		end
+	end
+	return 0
 end
 
 function SkynetIADSJammer.runCycle(self)
@@ -124,10 +131,16 @@ function SkynetIADSJammer.runCycle(self)
 end
 
 function SkynetIADSJammer:hasLineOfSightToRadar(radar)
-	local radarPos = radar:getPosition().p
-	--lift the radar 30 meters off the ground, some 3d models are dug in to the ground, creating issues in calculating LOS
-	radarPos.y = radarPos.y + 30
-	return land.isVisible(radarPos, self.emitter:getPosition().p) 
+	if radar and self.emitter then
+		local radarPos = radar:getPosition()
+		local emitterPos = self.emitter:getPosition()
+		if radarPos and radarPos.p and emitterPos and emitterPos.p then
+			--lift the radar 30 meters off the ground, some 3d models are dug in to the ground, creating issues in calculating LOS
+			radarPos.p.y = radarPos.p.y + 30
+			return land.isVisible(radarPos.p, emitterPos.p)
+		end
+	end
+	return false
 end
 
 function SkynetIADSJammer:masterArmSafe()
@@ -136,9 +149,14 @@ end
 
 --TODO: Remove Menu when emitter dies:
 function SkynetIADSJammer:addRadioMenu()
-	self.radioMenu = missionCommands.addSubMenu('Jammer: '..self.emitter:getName())
-	missionCommands.addCommand('Master Arm On', self.radioMenu, SkynetIADSJammer.updateMasterArm, {self = self, option = 'masterArmOn'})
-	missionCommands.addCommand('Master Arm Safe', self.radioMenu, SkynetIADSJammer.updateMasterArm, {self = self, option = 'masterArmSafe'})
+	if self.emitter then
+		local emitterName = self.emitter:getName()
+		if emitterName then
+			self.radioMenu = missionCommands.addSubMenu('Jammer: '..emitterName)
+			missionCommands.addCommand('Master Arm On', self.radioMenu, SkynetIADSJammer.updateMasterArm, {self = self, option = 'masterArmOn'})
+			missionCommands.addCommand('Master Arm Safe', self.radioMenu, SkynetIADSJammer.updateMasterArm, {self = self, option = 'masterArmSafe'})
+		end
+	end
 end
 
 function SkynetIADSJammer.updateMasterArm(params)

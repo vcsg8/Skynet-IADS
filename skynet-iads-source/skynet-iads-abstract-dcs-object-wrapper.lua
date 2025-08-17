@@ -9,8 +9,11 @@ function SkynetIADSAbstractDCSObjectWrapper:create(dcsRepresentation)
 	instance.dcsName = ""
 	instance.typeName = ""
 	instance:setDCSRepresentation(dcsRepresentation)
-	if getmetatable(dcsRepresentation) ~= Group then
-		instance.typeName = dcsRepresentation:getTypeName()
+	if dcsRepresentation and getmetatable(dcsRepresentation) ~= Group then
+		local typeName = dcsRepresentation:getTypeName()
+		if typeName then
+			instance.typeName = typeName
+		end
 	end
 	return instance
 end
@@ -18,10 +21,20 @@ end
 function SkynetIADSAbstractDCSObjectWrapper:setDCSRepresentation(representation)
 	self.dcsRepresentation = representation
 	if self.dcsRepresentation then
-		self.dcsName = self.dcsRepresentation:getName()
-		if (self.dcsName == nil or string.len(self.dcsName) == 0) and self.dcsRepresentation.id_ then
-			self.dcsName = self.dcsRepresentation.id_
+		if self.dcsRepresentation:isExist() then
+			local name = self.dcsRepresentation:getName()
+			if name then
+				self.dcsName = name
+			elseif self.dcsRepresentation.id_ then
+				self.dcsName = self.dcsRepresentation.id_
+			else
+				self.dcsName = ""
+			end
+		else
+			self.dcsName = ""
 		end
+	else
+		self.dcsName = ""
 	end
 end
 
@@ -38,7 +51,11 @@ function SkynetIADSAbstractDCSObjectWrapper:getTypeName()
 end
 
 function SkynetIADSAbstractDCSObjectWrapper:getPosition()
-	return self.dcsRepresentation:getPosition()
+	if self.dcsRepresentation and self.dcsRepresentation:isExist() then
+		return self.dcsRepresentation:getPosition()
+	else
+		return nil
+	end
 end
 
 function SkynetIADSAbstractDCSObjectWrapper:isExist()

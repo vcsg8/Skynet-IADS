@@ -112,8 +112,15 @@ function SkynetIADSLogger:printEarlyWarningRadarStatus()
 		for j = 1, #detectedTargets do
 			local contact = detectedTargets[j]
 			if firstRadar ~= nil and firstRadar:isExist() then
-				local distance = mist.utils.round(mist.utils.metersToNM(ewRadar:getDistanceInMetersToContact(firstRadar:getDCSRepresentation(), contact:getPosition().p)), 2)
-				self:printOutputToLog("CONTACT: "..contact:getName().." | TYPE: "..contact:getTypeName().." | DISTANCE NM: "..distance)
+				local contactPos = contact:getPosition()
+				if contactPos and contactPos.p then
+					local distance = mist.utils.round(mist.utils.metersToNM(ewRadar:getDistanceInMetersToContact(firstRadar:getDCSRepresentation(), contactPos.p)), 2)
+					local contactName = contact:getName()
+					local contactType = contact:getTypeName()
+					if contactName and contactType then
+						self:printOutputToLog("CONTACT: "..contactName.." | TYPE: "..contactType.." | DISTANCE NM: "..distance)
+					end
+				end
 			end
 		end
 		
@@ -203,8 +210,15 @@ function SkynetIADSLogger:printSAMSiteStatus()
 		for j = 1, #detectedTargets do
 			local contact = detectedTargets[j]
 			if firstRadar ~= nil and firstRadar:isExist() then
-				local distance = mist.utils.round(mist.utils.metersToNM(samSite:getDistanceInMetersToContact(firstRadar:getDCSRepresentation(), contact:getPosition().p)), 2)
-				self:printOutputToLog("CONTACT: "..contact:getName().." | TYPE: "..contact:getTypeName().." | DISTANCE NM: "..distance)
+				local contactPos = contact:getPosition()
+				if contactPos and contactPos.p then
+					local distance = mist.utils.round(mist.utils.metersToNM(samSite:getDistanceInMetersToContact(firstRadar:getDCSRepresentation(), contactPos.p)), 2)
+					local contactName = contact:getName()
+					local contactType = contact:getTypeName()
+					if contactName and contactType then
+						self:printOutputToLog("CONTACT: "..contactName.." | TYPE: "..contactType.." | DISTANCE NM: "..distance)
+					end
+				end
 			end
 		end
 		
@@ -333,7 +347,11 @@ function SkynetIADSLogger:printSystemStatus()
 		if contacts then
 			for i = 1, #contacts do
 				local contact = contacts[i]
-					self:printOutput("CONTACT: "..contact:getName().." | TYPE: "..contact:getTypeName().." | GS: "..tostring(contact:getGroundSpeedInKnots()).." | LAST SEEN: "..contact:getAge())
+					local contactName = contact:getName()
+		local contactType = contact:getTypeName()
+		if contactName and contactType then
+			self:printOutput("CONTACT: "..contactName.." | TYPE: "..contactType.." | GS: "..tostring(contact:getGroundSpeedInKnots()).." | LAST SEEN: "..contact:getAge())
+		end
 			end
 		end
 	end

@@ -42,13 +42,24 @@ end
 
 function SkynetIADSAWACSRadar:getDistanceTraveledSinceLastUpdate()
 	local currentPosition = nil
-	if self.lastUpdatePosition == nil and self:getDCSRepresentation():isExist() then
-		self.lastUpdatePosition = self:getDCSRepresentation():getPosition().p
+	local dcsRep = self:getDCSRepresentation()
+	if dcsRep and dcsRep:isExist() then
+		if self.lastUpdatePosition == nil then
+			local position = dcsRep:getPosition()
+			if position and position.p then
+				self.lastUpdatePosition = position.p
+			end
+		end
+		local position = dcsRep:getPosition()
+		if position and position.p then
+			currentPosition = position.p
+		end
 	end
-	if self:getDCSRepresentation():isExist() then
-		currentPosition = self:getDCSRepresentation():getPosition().p
+	if self.lastUpdatePosition and currentPosition then
+		return mist.utils.round(mist.utils.metersToNM(self:getDistanceToUnit(self.lastUpdatePosition, currentPosition)))
+	else
+		return 0
 	end
-	return mist.utils.round(mist.utils.metersToNM(self:getDistanceToUnit(self.lastUpdatePosition, currentPosition)))
 end
 
 end

@@ -19,7 +19,12 @@ function SkynetIADSContact:create(dcsRadarTarget, abstractRadarElementDetected)
 	instance.firstContactTime = timer.getAbsTime()
 	instance.lastTimeSeen = 0
 	instance.dcsRadarTarget = dcsRadarTarget
-	instance.position = instance:getDCSRepresentation():getPosition()
+	local dcsRep = instance:getDCSRepresentation()
+	local position = nil
+	if dcsRep and dcsRep:isExist() then
+		position = dcsRep:getPosition()
+	end
+	instance.position = position or { p = { x = 0, y = 0, z = 0 } }
 	instance.numOfTimesRefreshed = 0
 	instance.speed = 0
 	instance.harmState = SkynetIADSContact.HARM_UNKNOWN
@@ -45,10 +50,12 @@ end
 
 function SkynetIADSContact:getMagneticHeading()
 	if ( self:isExist() ) then
-		return mist.utils.round(mist.utils.toDegree(mist.getHeading(self:getDCSRepresentation())))
-	else
-		return -1
+		local dcsRep = self:getDCSRepresentation()
+		if dcsRep and dcsRep:isExist() then
+			return mist.utils.round(mist.utils.toDegree(mist.getHeading(dcsRep)))
+		end
 	end
+	return -1
 end
 
 function SkynetIADSContact:getAbstractRadarElementsDetected()
@@ -71,8 +78,9 @@ function SkynetIADSContact:getTypeName()
 	if self:isIdentifiedAsHARM() then
 		return SkynetIADSContact.HARM
 	end
-	if self:getDCSRepresentation() ~= nil then
-		local category = self:getDCSRepresentation():getCategory()
+	local dcsRep = self:getDCSRepresentation()
+	if dcsRep and dcsRep:isExist() then
+		local category = dcsRep:getCategory()
 		if category == Object.Category.UNIT then
 			return self.typeName
 		end
@@ -93,18 +101,25 @@ end
 
 function SkynetIADSContact:getHeightInFeetMSL()
 	if self:isExist() then
-		return mist.utils.round(mist.utils.metersToFeet(self:getDCSRepresentation():getPosition().p.y), 0)
-	else
-		return 0
+		local dcsRep = self:getDCSRepresentation()
+		if dcsRep then
+			local position = dcsRep:getPosition()
+			if position and position.p and position.p.y then
+				return mist.utils.round(mist.utils.metersToFeet(position.p.y), 0)
+			end
+		end
 	end
+	return 0
 end
 
 function SkynetIADSContact:getDesc()
 	if self:isExist() then
-		return self:getDCSRepresentation():getDesc()
-	else
-		return {}
+		local dcsRep = self:getDCSRepresentation()
+		if dcsRep and dcsRep:isExist() then
+			return dcsRep:getDesc()
+		end
 	end
+	return {}
 end
 
 function SkynetIADSContact:getNumberOfTimesHitByRadar()
@@ -116,28 +131,40 @@ function SkynetIADSContact:refresh()
 		local timeDelta = (timer.getAbsTime() - self.lastTimeSeen)
 		if timeDelta > 0 then
 			self.numOfTimesRefreshed = self.numOfTimesRefreshed + 1
-			local distance = mist.utils.metersToNM(mist.utils.get2DDist(self.position.p, self:getDCSRepresentation():getPosition().p))
-			local hours = timeDelta / 3600
-			self.speed = (distance / hours)
-			self:updateSimpleAltitudeProfile()
-			self.position = self:getDCSRepresentation():getPosition()
+			local dcsRep = self:getDCSRepresentation()
+			if dcsRep then
+				local position = dcsRep:getPosition()
+				if position and position.p and self.position and self.position.p then
+					local distance = mist.utils.metersToNM(mist.utils.get2DDist(self.position.p, position.p))
+					local hours = timeDelta / 3600
+					self.speed = (distance / hours)
+					self:updateSimpleAltitudeProfile()
+					self.position = position
+				end
+			end
 		end 
 	end
 	self.lastTimeSeen = timer.getAbsTime()
 end
 
 function SkynetIADSContact:updateSimpleAltitudeProfile()
-	local currentAltitude = self:getDCSRepresentation():getPosition().p.y
-	
-	local previousPath = ""
-	if #self.simpleAltitudeProfile > 0 then
-		previousPath = self.simpleAltitudeProfile[#self.simpleAltitudeProfile]
-	end
-	
-	if self.position.p.y > currentAltitude and previousPath ~= SkynetIADSContact.DESCEND then
-		table.insert(self.simpleAltitudeProfile, SkynetIADSContact.DESCEND)
-	elseif self.position.p.y < currentAltitude and previousPath ~= SkynetIADSContact.CLIMB then
-		table.insert(self.simpleAltitudeProfile, SkynetIADSContact.CLIMB)
+	local dcsRep = self:getDCSRepresentation()
+	if dcsRep then
+		local position = dcsRep:getPosition()
+		if position and position.p and position.p.y and self.position and self.position.p and self.position.p.y then
+			local currentAltitude = position.p.y
+			
+			local previousPath = ""
+			if #self.simpleAltitudeProfile > 0 then
+				previousPath = self.simpleAltitudeProfile[#self.simpleAltitudeProfile]
+			end
+			
+			if self.position.p.y > currentAltitude and previousPath ~= SkynetIADSContact.DESCEND then
+				table.insert(self.simpleAltitudeProfile, SkynetIADSContact.DESCEND)
+			elseif self.position.p.y < currentAltitude and previousPath ~= SkynetIADSContact.CLIMB then
+				table.insert(self.simpleAltitudeProfile, SkynetIADSContact.CLIMB)
+			end
+		end
 	end
 end
 

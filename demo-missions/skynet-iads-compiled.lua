@@ -1,4 +1,4 @@
-env.info("--- SKYNET VERSION: 3.3.0 | BUILD TIME: 29.12.2023 2311Z ---")
+env.info("--- SKYNET VERSION: dev | BUILD TIME: 17.08.2025 2333Z ---")
 do
 --this file contains the required units per sam type
 samTypesDB = {	
@@ -337,6 +337,38 @@ samTypesDB = {
 		['can_engage_harm'] = true
 		
 	},
+	['Tor-M2'] = {
+		['type'] = 'single',
+		['searchRadar'] = {
+			['CHAP_TorM2'] = {
+			},
+		},
+		['launchers'] = {
+			['CHAP_TorM2'] = {
+			},
+		},
+		['name'] = {
+			['NATO'] = 'SA-15 Gauntlet (Tor-M2)',
+		},
+		['harm_detection_chance'] = 90,
+		['can_engage_harm'] = true
+	},
+	['Pantsir-S1'] = {
+		['type'] = 'single',
+		['searchRadar'] = {
+			['CHAP_PantsirS1'] = {
+			},
+		},
+		['launchers'] = {
+			['CHAP_PantsirS1'] = {
+			},
+		},
+		['name'] = {
+			['NATO'] = 'SA-22 Greyhound',
+		},
+		['harm_detection_chance'] = 80,
+		['can_engage_harm'] = true
+	},
 	['Gepard'] = {
 		['type'] = 'single',
 		['searchRadar'] = {
@@ -352,6 +384,27 @@ samTypesDB = {
 		},
 		['harm_detection_chance'] = 10
 	},		
+    ['IRIS-T SLM'] = {
+        ['type'] = 'complex',
+        ['searchRadar'] = {
+            ['CHAP_IRISTSLM_STR'] = {
+            },
+        },
+        ['launchers'] = {
+            ['CHAP_IRISTSLM_LN'] = {
+            },
+        },
+        ['misc'] = {
+            ['CHAP_IRISTSLM_CP'] = {
+                ['required'] = true,
+            },
+        },
+        ['name'] = {
+            ['NATO'] = 'IRIS-T SLM',
+        },
+        ['harm_detection_chance'] = 90,
+        ['can_engage_harm'] = true
+    },
     ['Rapier'] = {
         ['searchRadar'] = {
             ['rapier_fsa_blindfire_radar'] = {
@@ -814,6 +867,220 @@ end
 
 
 
+-- Minimal internal MIST compatibility layer for Skynet IADS
+-- Provides only the functions and tables Skynet uses from MIST.
+
+if not mist then
+    mist = {}
+end
+
+-- Utils subtable
+mist.utils = mist.utils or {}
+
+-- Rounding with optional decimals (defaults to 0)
+function mist.utils.round(value, decimals)
+    decimals = decimals or 0
+    local mult = 10 ^ decimals
+    if value >= 0 then
+        return math.floor(value * mult + 0.5) / mult
+    else
+        return math.ceil(value * mult - 0.5) / mult
+    end
+end
+
+-- Converts meters to nautical miles
+function mist.utils.metersToNM(meters)
+    return meters / 1852
+end
+
+-- Converts meters to feet
+function mist.utils.metersToFeet(meters)
+    return meters * 3.280839895
+end
+
+-- Convert radians to degrees
+function mist.utils.toDegree(rad)
+    return rad * (180 / math.pi)
+end
+
+-- 2D distance (XZ-plane)
+function mist.utils.get2DDist(a, b)
+    local dx = (a.x or 0) - (b.x or 0)
+    local dz = (a.z or 0) - (b.z or 0)
+    return math.sqrt(dx * dx + dz * dz)
+end
+
+-- 3D distance
+function mist.utils.get3DDist(a, b)
+    local dx = (a.x or 0) - (b.x or 0)
+    local dy = (a.y or 0) - (b.y or 0)
+    local dz = (a.z or 0) - (b.z or 0)
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
+-- Heading from point a to point b in radians (0..2*pi), 0 = north
+function mist.utils.getHeadingPoints(a, b)
+    local dx = (b.x or 0) - (a.x or 0)
+    local dz = (b.z or 0) - (a.z or 0)
+    local heading = math.atan2(dx, dz)
+    if heading < 0 then heading = heading + 2 * math.pi end
+    return heading
+end
+
+-- Heading of a DCS Unit in radians (0..2*pi), 0 = north
+function mist.getHeading(dcsObject)
+    if not dcsObject or not dcsObject.getPosition then return 0 end
+    local pos = dcsObject:getPosition()
+    if not pos or not pos.x then return 0 end
+    local fwd = pos.x -- forward vector of the object in world space
+    local heading = math.atan2(fwd.x or 0, fwd.z or 0)
+    if heading < 0 then heading = heading + 2 * math.pi end
+    return heading
+end
+
+-- Random integer between a and b inclusive
+function mist.random(a, b)
+    if a == nil and b == nil then
+        return math.random()
+    end
+    if b == nil then
+        return math.random(1, a)
+    end
+    return math.random(a, b)
+end
+
+-- Minimal DBs with groupsByName and unitsByName populated from env.mission
+mist.DBs = mist.DBs or {}
+mist.DBs.unitsByName = mist.DBs.unitsByName or {}
+mist.DBs.groupsByName = mist.DBs.groupsByName or {}
+
+-- Removal helpers for keeping DBs in sync with runtime
+function mist.DBs.removeUnitByName(name)
+    if name and mist.DBs.unitsByName then
+        mist.DBs.unitsByName[name] = nil
+    end
+end
+
+local function _allGroupUnitsRemoved(groupName)
+    local grp = mist.DBs.groupsByName and mist.DBs.groupsByName[groupName]
+    if not grp or not grp.units then return true end
+    for _, u in ipairs(grp.units) do
+        if u and u.name and mist.DBs.unitsByName[u.name] ~= nil then
+            return false
+        end
+    end
+    return true
+end
+
+function mist.DBs.removeGroupIfEmpty(groupName)
+    if groupName and mist.DBs.groupsByName and _allGroupUnitsRemoved(groupName) then
+        mist.DBs.groupsByName[groupName] = nil
+    end
+end
+
+local function _skynet_iads_build_dbs()
+    if not env or not env.mission or not env.mission.coalition then
+        return
+    end
+    local coalitions = { 'blue', 'red', 'neutrals' }
+    local categories = { 'plane', 'helicopter', 'vehicle', 'ship', 'static' }
+    for _, coalName in ipairs(coalitions) do
+        local coalTbl = env.mission.coalition[coalName]
+        if coalTbl and coalTbl.country then
+            for _, country in ipairs(coalTbl.country) do
+                for _, cat in ipairs(categories) do
+                    local catTbl = country[cat]
+                    if catTbl and catTbl.group then
+                        for _, grp in ipairs(catTbl.group) do
+                            if grp and grp.name then
+                                mist.DBs.groupsByName[grp.name] = grp
+                                if grp.units then
+                                    for _, unit in ipairs(grp.units) do
+                                        if unit and unit.name then
+                                            mist.DBs.unitsByName[unit.name] = unit
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Build DBs immediately on load (mission start)
+_skynet_iads_build_dbs()
+
+-- Safe accessors that prune DB when DCS returns nil
+function mist.safeGetUnitByName(name)
+    if not name then return nil end
+    local u = Unit.getByName and Unit.getByName(name) or nil
+    if not u then
+        mist.DBs.removeUnitByName(name)
+    end
+    return u
+end
+
+function mist.safeGetGroupByName(name)
+    if not name then return nil end
+    local g = Group.getByName and Group.getByName(name) or nil
+    if not g then
+        -- if group no longer resolves, try pruning if its units are gone
+        mist.DBs.removeGroupIfEmpty(name)
+    end
+    return g
+end
+
+-- Scheduling wrappers
+-- Schedules a function after startDelay seconds and repeats every interval seconds if provided.
+-- Returns a timer id that can be passed to mist.removeFunction.
+function mist.scheduleFunction(fn, args, startDelay, interval)
+    args = args or {}
+    startDelay = startDelay or 0
+    local startTime = (timer and timer.getTime and timer.getTime()) or 0
+    local function wrapper(_, t)
+        fn(unpack(args))
+        if interval and interval > 0 then
+            return t + interval
+        end
+        return nil
+    end
+    if timer and timer.scheduleFunction then
+        return timer.scheduleFunction(wrapper, {}, startTime + startDelay)
+    else
+        -- Fallback no-op when timer is unavailable (e.g. during static analysis)
+        return nil
+    end
+end
+
+function mist.removeFunction(id)
+    if timer and timer.removeFunction and id then
+        timer.removeFunction(id)
+    end
+end
+
+-- Runtime pruning via world event handler: S_EVENT_DEAD (id = 8)
+if world and world.addEventHandler and world.event and world.event.S_EVENT_DEAD then
+    local _mist_db_event_handler = {}
+    function _mist_db_event_handler:onEvent(event)
+        if not event then return end
+        if event.id == world.event.S_EVENT_DEAD and event.initiator and event.initiator.getName then
+            local unitName = event.initiator:getName()
+            if unitName and unitName ~= '' then
+                mist.DBs.removeUnitByName(unitName)
+                -- attempt to prune empty group
+                local ok, groupObj = pcall(function() return event.initiator:getGroup() end)
+                if ok and groupObj and groupObj.getName then
+                    local groupName = groupObj:getName()
+                    mist.DBs.removeGroupIfEmpty(groupName)
+                end
+            end
+        end
+    end
+    world.addEventHandler(_mist_db_event_handler)
+end
 do
 
 SkynetIADSLogger = {}
@@ -928,8 +1195,15 @@ function SkynetIADSLogger:printEarlyWarningRadarStatus()
 		for j = 1, #detectedTargets do
 			local contact = detectedTargets[j]
 			if firstRadar ~= nil and firstRadar:isExist() then
-				local distance = mist.utils.round(mist.utils.metersToNM(ewRadar:getDistanceInMetersToContact(firstRadar:getDCSRepresentation(), contact:getPosition().p)), 2)
-				self:printOutputToLog("CONTACT: "..contact:getName().." | TYPE: "..contact:getTypeName().." | DISTANCE NM: "..distance)
+				local contactPos = contact:getPosition()
+				if contactPos and contactPos.p then
+					local distance = mist.utils.round(mist.utils.metersToNM(ewRadar:getDistanceInMetersToContact(firstRadar:getDCSRepresentation(), contactPos.p)), 2)
+					local contactName = contact:getName()
+					local contactType = contact:getTypeName()
+					if contactName and contactType then
+						self:printOutputToLog("CONTACT: "..contactName.." | TYPE: "..contactType.." | DISTANCE NM: "..distance)
+					end
+				end
 			end
 		end
 		
@@ -1019,8 +1293,15 @@ function SkynetIADSLogger:printSAMSiteStatus()
 		for j = 1, #detectedTargets do
 			local contact = detectedTargets[j]
 			if firstRadar ~= nil and firstRadar:isExist() then
-				local distance = mist.utils.round(mist.utils.metersToNM(samSite:getDistanceInMetersToContact(firstRadar:getDCSRepresentation(), contact:getPosition().p)), 2)
-				self:printOutputToLog("CONTACT: "..contact:getName().." | TYPE: "..contact:getTypeName().." | DISTANCE NM: "..distance)
+				local contactPos = contact:getPosition()
+				if contactPos and contactPos.p then
+					local distance = mist.utils.round(mist.utils.metersToNM(samSite:getDistanceInMetersToContact(firstRadar:getDCSRepresentation(), contactPos.p)), 2)
+					local contactName = contact:getName()
+					local contactType = contact:getTypeName()
+					if contactName and contactType then
+						self:printOutputToLog("CONTACT: "..contactName.." | TYPE: "..contactType.." | DISTANCE NM: "..distance)
+					end
+				end
 			end
 		end
 		
@@ -1149,7 +1430,11 @@ function SkynetIADSLogger:printSystemStatus()
 		if contacts then
 			for i = 1, #contacts do
 				local contact = contacts[i]
-					self:printOutput("CONTACT: "..contact:getName().." | TYPE: "..contact:getTypeName().." | GS: "..tostring(contact:getGroundSpeedInKnots()).." | LAST SEEN: "..contact:getAge())
+					local contactName = contact:getName()
+		local contactType = contact:getTypeName()
+		if contactName and contactType then
+			self:printOutput("CONTACT: "..contactName.." | TYPE: "..contactType.." | GS: "..tostring(contact:getGroundSpeedInKnots()).." | LAST SEEN: "..contact:getAge())
+		end
 			end
 		end
 	end
@@ -1216,7 +1501,14 @@ function SkynetIADS:setCoalition(item)
 			self.coalitionID = coalitionID
 		end
 		if self.coalitionID ~= coalitionID then
-			self:printOutputToLog("element: "..item:getName().." has a different coalition than the IADS", true)
+			local itemName = "UNKNOWN"
+			if item and item:isExist() then
+				local name = item:getName()
+				if name then
+					itemName = name
+				end
+			end
+			self:printOutputToLog("element: "..itemName.." has a different coalition than the IADS", true)
 		end
 	end
 end
@@ -1270,8 +1562,8 @@ function SkynetIADS:addEarlyWarningRadarsByPrefix(prefix)
 	for unitName, unit in pairs(mist.DBs.unitsByName) do
 		local pos = self:findSubString(unitName, prefix)
 		--somehow the MIST unit db contains StaticObject, we check to see we only add Units
-		local unit = Unit.getByName(unitName)
-		if pos and pos == 1 and unit then
+		local unitObj = mist.safeGetUnitByName(unitName)
+		if pos and pos == 1 and unitObj then
 			self:addEarlyWarningRadar(unitName)
 		end
 	end
@@ -1286,11 +1578,20 @@ function SkynetIADS:addEarlyWarningRadar(earlyWarningRadarUnitName)
 	end
 	self:setCoalition(earlyWarningRadarUnit)
 	local ewRadar = nil
-	local category = earlyWarningRadarUnit:getDesc().category
-	if category == Unit.Category.AIRPLANE or category == Unit.Category.SHIP then
-		ewRadar = SkynetIADSAWACSRadar:create(earlyWarningRadarUnit, self)
+	local desc = nil
+	if earlyWarningRadarUnit and earlyWarningRadarUnit:isExist() then
+		desc = earlyWarningRadarUnit:getDesc()
+	end
+	if desc and desc.category then
+		local category = desc.category
+		if category == Unit.Category.AIRPLANE or category == Unit.Category.SHIP then
+			ewRadar = SkynetIADSAWACSRadar:create(earlyWarningRadarUnit, self)
+		else
+			ewRadar = SkynetIADSEWRadar:create(earlyWarningRadarUnit, self)
+		end
 	else
-		ewRadar = SkynetIADSEWRadar:create(earlyWarningRadarUnit, self)
+		self:printOutputToLog("EW Radar has no valid description or category: "..earlyWarningRadarUnitName, true)
+		return
 	end
 	ewRadar:setupElements()
 	ewRadar:setCachedTargetsMaxAge(self:getCachedTargetsMaxAge())	
@@ -1336,9 +1637,12 @@ function SkynetIADS:addSAMSitesByPrefix(prefix)
 		local pos = self:findSubString(groupName, prefix)
 		if pos and pos == 1 then
 			--mist returns groups, units and, StaticObjects
-			local dcsObject = Group.getByName(groupName)
-			if dcsObject and dcsObject:getUnits()[1]:isActive() then
+			local dcsObject = mist.safeGetGroupByName(groupName)
+			if dcsObject then
+				local units = dcsObject:getUnits()
+				if units and units[1] and units[1]:isActive() then
 				self:addSAMSite(groupName)
+				end
 			end
 		end
 	end
@@ -1359,7 +1663,7 @@ function SkynetIADS:getSAMSitesByPrefix(prefix)
 end
 
 function SkynetIADS:addSAMSite(samSiteName)
-	local samSiteDCS = Group.getByName(samSiteName)
+	local samSiteDCS = mist.safeGetGroupByName(samSiteName)
 	if samSiteDCS == nil then
 		self:printOutputToLog("you have added an SAM Site that does not exist, check name of Group in Setup and Mission editor: "..tostring(samSiteName), true)
 		return
@@ -1519,7 +1823,10 @@ function SkynetIADS.evaluateContacts(self)
 			-- the DCS Radar only returns enemy aircraft, if that should change a coalition check will be required
 			-- currently every type of object in the air is handed of to the SAM site, including missiles
 			local description = contact:getDesc()
-			local category = description.category
+			local category = nil
+			if description and description.category then
+				category = description.category
+			end
 			if category and category ~= Unit.Category.GROUND_UNIT and category ~= Unit.Category.SHIP and category ~= Unit.Category.STRUCTURE then
 				samToTrigger:informOfContact(contact)
 			end
@@ -1670,7 +1977,9 @@ function SkynetIADS:mergeContact(contact)
 	local existingContact = false
 	for i = 1, #self.contacts do
 		local iadsContact = self.contacts[i]
-		if iadsContact:getName() == contact:getName() then
+		local iadsContactName = iadsContact:getName()
+		local contactName = contact:getName()
+		if iadsContactName and contactName and iadsContactName == contactName then
 			iadsContact:refresh()
 			--these contacts are used in the logger we set a kown harm state of a contact coming from a SAM site. So the logger will show them als HARMs
 			contact:setHARMState(iadsContact:getHARMState())
@@ -1826,7 +2135,16 @@ function SkynetMooseA2ADispatcherConnector:getEarlyWarningRadarGroupNames()
 		local ewRadars = self.iadsCollection[i]:getUsableEarlyWarningRadars()
 		for j = 1, #ewRadars do
 			local ewRadar = ewRadars[j]
-			table.insert(self.ewRadarGroupNames, ewRadar:getDCSRepresentation():getGroup():getName())
+			local dcsRep = ewRadar:getDCSRepresentation()
+			if dcsRep then
+				local group = dcsRep:getGroup()
+				if group then
+					local groupName = group:getName()
+					if groupName then
+						table.insert(self.ewRadarGroupNames, groupName)
+					end
+				end
+			end
 		end
 	end
 	return self.ewRadarGroupNames
@@ -1899,8 +2217,11 @@ function SkynetIADSAbstractDCSObjectWrapper:create(dcsRepresentation)
 	instance.dcsName = ""
 	instance.typeName = ""
 	instance:setDCSRepresentation(dcsRepresentation)
-	if getmetatable(dcsRepresentation) ~= Group then
-		instance.typeName = dcsRepresentation:getTypeName()
+	if dcsRepresentation and getmetatable(dcsRepresentation) ~= Group then
+		local typeName = dcsRepresentation:getTypeName()
+		if typeName then
+			instance.typeName = typeName
+		end
 	end
 	return instance
 end
@@ -1908,10 +2229,20 @@ end
 function SkynetIADSAbstractDCSObjectWrapper:setDCSRepresentation(representation)
 	self.dcsRepresentation = representation
 	if self.dcsRepresentation then
-		self.dcsName = self.dcsRepresentation:getName()
-		if (self.dcsName == nil or string.len(self.dcsName) == 0) and self.dcsRepresentation.id_ then
-			self.dcsName = self.dcsRepresentation.id_
+		if self.dcsRepresentation:isExist() then
+			local name = self.dcsRepresentation:getName()
+			if name then
+				self.dcsName = name
+			elseif self.dcsRepresentation.id_ then
+				self.dcsName = self.dcsRepresentation.id_
+			else
+				self.dcsName = ""
+			end
+		else
+			self.dcsName = ""
 		end
+	else
+		self.dcsName = ""
 	end
 end
 
@@ -1928,7 +2259,11 @@ function SkynetIADSAbstractDCSObjectWrapper:getTypeName()
 end
 
 function SkynetIADSAbstractDCSObjectWrapper:getPosition()
-	return self.dcsRepresentation:getPosition()
+	if self.dcsRepresentation and self.dcsRepresentation:isExist() then
+		return self.dcsRepresentation:getPosition()
+	else
+		return nil
+	end
 end
 
 function SkynetIADSAbstractDCSObjectWrapper:isExist()
@@ -2195,16 +2530,17 @@ end
 
 --TODO: this method could be updated to only return Radar weapons fired, this way a SAM firing an IR weapon could go dark faster in the goDark() method
 function SkynetIADSAbstractRadarElement:weaponFired(event)
-	if event.id == world.event.S_EVENT_SHOT then
-		local weapon = event.weapon
-		local launcherFired = event.initiator
-		for i = 1, #self.launchers do
-			local launcher = self.launchers[i]
-			if launcher:getDCSRepresentation() == launcherFired then
-				table.insert(self.missilesInFlight, weapon)
-			end
-		end
-	end
+    if event.id == world.event.S_EVENT_SHOT then
+        local weapon = event.weapon
+        if not weapon then return end
+        local launcherFired = event.initiator
+        for i = 1, #self.launchers do
+            local launcher = self.launchers[i]
+            if launcher:getDCSRepresentation() == launcherFired then
+                table.insert(self.missilesInFlight, weapon)
+            end
+        end
+    end
 end
 
 function SkynetIADSAbstractRadarElement:setCachedTargetsMaxAge(maxAge)
@@ -2394,15 +2730,20 @@ end
 
 -- DCS does not send an event, when a missile is destroyed, so this method needs to be polled so that the missiles in flight are current, polling is done in the HARM Search call: evaluateIfTargetsContainHARMs
 function SkynetIADSAbstractRadarElement:updateMissilesInFlight()
-	local missilesInFlight = {}
-	for i = 1, #self.missilesInFlight do
-		local missile = self.missilesInFlight[i]
-		if missile:isExist() then
-			table.insert(missilesInFlight, missile)
-		end
-	end
-	self.missilesInFlight = missilesInFlight
-	self:goDarkIfOutOfAmmo()
+    local missilesInFlight = {}
+    for i = 1, #self.missilesInFlight do
+        local missile = self.missilesInFlight[i]
+        local exists = false
+        if missile and missile.isExist then
+            local ok, res = pcall(function() return missile:isExist() end)
+            exists = ok and res == true
+        end
+        if exists then
+            table.insert(missilesInFlight, missile)
+        end
+    end
+    self.missilesInFlight = missilesInFlight
+    self:goDarkIfOutOfAmmo()
 end
 
 function SkynetIADSAbstractRadarElement:goDarkIfOutOfAmmo()
@@ -2436,9 +2777,15 @@ end
 
 function SkynetIADSAbstractRadarElement:getUnitsToAnalyse()
 	local units = {}
-	table.insert(units, self:getDCSRepresentation())
-	if getmetatable(self:getDCSRepresentation()) == Group then
-		units = self:getDCSRepresentation():getUnits()
+	local dcsRep = self:getDCSRepresentation()
+	if dcsRep then
+		table.insert(units, dcsRep)
+		if getmetatable(dcsRep) == Group then
+			local groupUnits = dcsRep:getUnits()
+			if groupUnits then
+				units = groupUnits
+			end
+		end
 	end
 	return units
 end
@@ -2600,7 +2947,7 @@ end
 
 function SkynetIADSAbstractRadarElement:getController()
 	local dcsRepresentation = self:getDCSRepresentation()
-	if dcsRepresentation:isExist() then
+	if dcsRepresentation and dcsRepresentation:isExist() then
 		return dcsRepresentation:getController()
 	else
 		return nil
@@ -2781,9 +3128,17 @@ function SkynetIADSAbstractRadarElement:isInRadarDetectionRangeOf(abstractRadarE
 		for j = 1, #abstractRadarElementRadars do
 			local abstractRadarElementRadar = abstractRadarElementRadars[j]
 			if  abstractRadarElementRadar:isExist() and radar:isExist() then
-				local distance = self:getDistanceToUnit(radar:getDCSRepresentation():getPosition().p, abstractRadarElementRadar:getDCSRepresentation():getPosition().p)	
-				if abstractRadarElementRadar:getMaxRangeFindingTarget() >= distance then
-					return true
+				local radarDcsRep = radar:getDCSRepresentation()
+				local abstractRadarDcsRep = abstractRadarElementRadar:getDCSRepresentation()
+				if radarDcsRep and abstractRadarDcsRep then
+					local radarPos = radarDcsRep:getPosition()
+					local abstractRadarPos = abstractRadarDcsRep:getPosition()
+					if radarPos and radarPos.p and abstractRadarPos and abstractRadarPos.p then
+						local distance = self:getDistanceToUnit(radarPos.p, abstractRadarPos.p)	
+						if abstractRadarElementRadar:getMaxRangeFindingTarget() >= distance then
+							return true
+						end
+					end
 				end
 			end
 		end
@@ -2916,7 +3271,13 @@ function SkynetIADSAbstractRadarElement:getSecondsToImpact(distanceNM, speedKT)
 end
 
 function SkynetIADSAbstractRadarElement:getDistanceInMetersToContact(radarUnit, point)
-	return mist.utils.round(mist.utils.get3DDist(radarUnit:getPosition().p, point), 0)
+	if radarUnit then
+		local position = radarUnit:getPosition()
+		if position and position.p then
+			return mist.utils.round(mist.utils.get3DDist(position.p, point), 0)
+		end
+	end
+	return 0
 end
 
 function SkynetIADSAbstractRadarElement:calculateMinimalShutdownTimeInSeconds(timeToImpact)
@@ -2929,7 +3290,13 @@ end
 
 function SkynetIADSAbstractRadarElement:calculateImpactPoint(target, distanceInMeters)
 	-- distance needs to be incremented by a certain value for ip calculation to work, check why presumably due to rounding errors in the previous distance calculation
-	return land.getIP(target:getPosition().p, target:getPosition().x, distanceInMeters + 50)
+	if target then
+		local position = target:getPosition()
+		if position and position.p and position.x then
+			return land.getIP(position.p, position.x, distanceInMeters + 50)
+		end
+	end
+	return nil
 end
 
 function SkynetIADSAbstractRadarElement:shallReactToHARM()
@@ -2953,22 +3320,26 @@ function SkynetIADSAbstractRadarElement:informOfHARM(harmContact)
 		for j = 1, #radars do
 			local radar = radars[j]
 			if radar:isExist() then
-				local distanceNM =  mist.utils.metersToNM(self:getDistanceInMetersToContact(radar, harmContact:getPosition().p))
-				local harmToSAMHeading = mist.utils.toDegree(mist.utils.getHeadingPoints(harmContact:getPosition().p, radar:getPosition().p))
-				local harmToSAMAspect = self:calculateAspectInDegrees(harmContact:getMagneticHeading(), harmToSAMHeading)
-				local speedKT = harmContact:getGroundSpeedInKnots(0)
-				local secondsToImpact = self:getSecondsToImpact(distanceNM, speedKT)
-				--TODO: use tti instead of distanceNM?
-				-- when iterating through the radars, store shortest tti and work with that value??
-				if ( harmToSAMAspect < SkynetIADSAbstractRadarElement.HARM_TO_SAM_ASPECT and distanceNM < SkynetIADSAbstractRadarElement.HARM_LOOKAHEAD_NM ) then
-					self:addObjectIdentifiedAsHARM(harmContact)
-					if ( #self:getPointDefences() > 0 and self:pointDefencesGoLive() == true and self.iads:getDebugSettings().harmDefence ) then
-							self.iads:printOutputToLog("POINT DEFENCES GOING LIVE FOR: "..self:getDCSName().." | TTI: "..secondsToImpact)
-					end
-					--self.iads:printOutputToLog("Ignore HARM shutdown: "..tostring(self:shallIgnoreHARMShutdown()))
-					if ( self:getIsAPointDefence() == false and ( self:isDefendingHARM() == false or ( self:getHARMShutdownTime() < secondsToImpact ) ) and self:shallIgnoreHARMShutdown() == false) then
-						self:goSilentToEvadeHARM(secondsToImpact)
-						break
+				local harmContactPos = harmContact:getPosition()
+				local radarPos = radar:getPosition()
+				if harmContactPos and harmContactPos.p and radarPos and radarPos.p then
+					local distanceNM =  mist.utils.metersToNM(self:getDistanceInMetersToContact(radar, harmContactPos.p))
+					local harmToSAMHeading = mist.utils.toDegree(mist.utils.getHeadingPoints(harmContactPos.p, radarPos.p))
+					local harmToSAMAspect = self:calculateAspectInDegrees(harmContact:getMagneticHeading(), harmToSAMHeading)
+					local speedKT = harmContact:getGroundSpeedInKnots(0)
+					local secondsToImpact = self:getSecondsToImpact(distanceNM, speedKT)
+					--TODO: use tti instead of distanceNM?
+					-- when iterating through the radars, store shortest tti and work with that value??
+					if ( harmToSAMAspect < SkynetIADSAbstractRadarElement.HARM_TO_SAM_ASPECT and distanceNM < SkynetIADSAbstractRadarElement.HARM_LOOKAHEAD_NM ) then
+						self:addObjectIdentifiedAsHARM(harmContact)
+						if ( #self:getPointDefences() > 0 and self:pointDefencesGoLive() == true and self.iads:getDebugSettings().harmDefence ) then
+								self.iads:printOutputToLog("POINT DEFENCES GOING LIVE FOR: "..self:getDCSName().." | TTI: "..secondsToImpact)
+						end
+						--self.iads:printOutputToLog("Ignore HARM shutdown: "..tostring(self:shallIgnoreHARMShutdown()))
+						if ( self:getIsAPointDefence() == false and ( self:isDefendingHARM() == false or ( self:getHARMShutdownTime() < secondsToImpact ) ) and self:shallIgnoreHARMShutdown() == false) then
+							self:goSilentToEvadeHARM(secondsToImpact)
+							break
+						end
 					end
 				end
 			end
@@ -3070,13 +3441,24 @@ end
 
 function SkynetIADSAWACSRadar:getDistanceTraveledSinceLastUpdate()
 	local currentPosition = nil
-	if self.lastUpdatePosition == nil and self:getDCSRepresentation():isExist() then
-		self.lastUpdatePosition = self:getDCSRepresentation():getPosition().p
+	local dcsRep = self:getDCSRepresentation()
+	if dcsRep and dcsRep:isExist() then
+		if self.lastUpdatePosition == nil then
+			local position = dcsRep:getPosition()
+			if position and position.p then
+				self.lastUpdatePosition = position.p
+			end
+		end
+		local position = dcsRep:getPosition()
+		if position and position.p then
+			currentPosition = position.p
+		end
 	end
-	if self:getDCSRepresentation():isExist() then
-		currentPosition = self:getDCSRepresentation():getPosition().p
+	if self.lastUpdatePosition and currentPosition then
+		return mist.utils.round(mist.utils.metersToNM(self:getDistanceToUnit(self.lastUpdatePosition, currentPosition)))
+	else
+		return 0
 	end
-	return mist.utils.round(mist.utils.metersToNM(self:getDistanceToUnit(self.lastUpdatePosition, currentPosition)))
 end
 
 end
@@ -3123,7 +3505,12 @@ function SkynetIADSContact:create(dcsRadarTarget, abstractRadarElementDetected)
 	instance.firstContactTime = timer.getAbsTime()
 	instance.lastTimeSeen = 0
 	instance.dcsRadarTarget = dcsRadarTarget
-	instance.position = instance:getDCSRepresentation():getPosition()
+	local dcsRep = instance:getDCSRepresentation()
+	local position = nil
+	if dcsRep and dcsRep:isExist() then
+		position = dcsRep:getPosition()
+	end
+	instance.position = position or { p = { x = 0, y = 0, z = 0 } }
 	instance.numOfTimesRefreshed = 0
 	instance.speed = 0
 	instance.harmState = SkynetIADSContact.HARM_UNKNOWN
@@ -3149,10 +3536,12 @@ end
 
 function SkynetIADSContact:getMagneticHeading()
 	if ( self:isExist() ) then
-		return mist.utils.round(mist.utils.toDegree(mist.getHeading(self:getDCSRepresentation())))
-	else
-		return -1
+		local dcsRep = self:getDCSRepresentation()
+		if dcsRep and dcsRep:isExist() then
+			return mist.utils.round(mist.utils.toDegree(mist.getHeading(dcsRep)))
+		end
 	end
+	return -1
 end
 
 function SkynetIADSContact:getAbstractRadarElementsDetected()
@@ -3175,8 +3564,9 @@ function SkynetIADSContact:getTypeName()
 	if self:isIdentifiedAsHARM() then
 		return SkynetIADSContact.HARM
 	end
-	if self:getDCSRepresentation() ~= nil then
-		local category = self:getDCSRepresentation():getCategory()
+	local dcsRep = self:getDCSRepresentation()
+	if dcsRep and dcsRep:isExist() then
+		local category = dcsRep:getCategory()
 		if category == Object.Category.UNIT then
 			return self.typeName
 		end
@@ -3197,18 +3587,25 @@ end
 
 function SkynetIADSContact:getHeightInFeetMSL()
 	if self:isExist() then
-		return mist.utils.round(mist.utils.metersToFeet(self:getDCSRepresentation():getPosition().p.y), 0)
-	else
-		return 0
+		local dcsRep = self:getDCSRepresentation()
+		if dcsRep then
+			local position = dcsRep:getPosition()
+			if position and position.p and position.p.y then
+				return mist.utils.round(mist.utils.metersToFeet(position.p.y), 0)
+			end
+		end
 	end
+	return 0
 end
 
 function SkynetIADSContact:getDesc()
 	if self:isExist() then
-		return self:getDCSRepresentation():getDesc()
-	else
-		return {}
+		local dcsRep = self:getDCSRepresentation()
+		if dcsRep and dcsRep:isExist() then
+			return dcsRep:getDesc()
+		end
 	end
+	return {}
 end
 
 function SkynetIADSContact:getNumberOfTimesHitByRadar()
@@ -3220,28 +3617,40 @@ function SkynetIADSContact:refresh()
 		local timeDelta = (timer.getAbsTime() - self.lastTimeSeen)
 		if timeDelta > 0 then
 			self.numOfTimesRefreshed = self.numOfTimesRefreshed + 1
-			local distance = mist.utils.metersToNM(mist.utils.get2DDist(self.position.p, self:getDCSRepresentation():getPosition().p))
-			local hours = timeDelta / 3600
-			self.speed = (distance / hours)
-			self:updateSimpleAltitudeProfile()
-			self.position = self:getDCSRepresentation():getPosition()
+			local dcsRep = self:getDCSRepresentation()
+			if dcsRep then
+				local position = dcsRep:getPosition()
+				if position and position.p and self.position and self.position.p then
+					local distance = mist.utils.metersToNM(mist.utils.get2DDist(self.position.p, position.p))
+					local hours = timeDelta / 3600
+					self.speed = (distance / hours)
+					self:updateSimpleAltitudeProfile()
+					self.position = position
+				end
+			end
 		end 
 	end
 	self.lastTimeSeen = timer.getAbsTime()
 end
 
 function SkynetIADSContact:updateSimpleAltitudeProfile()
-	local currentAltitude = self:getDCSRepresentation():getPosition().p.y
-	
-	local previousPath = ""
-	if #self.simpleAltitudeProfile > 0 then
-		previousPath = self.simpleAltitudeProfile[#self.simpleAltitudeProfile]
-	end
-	
-	if self.position.p.y > currentAltitude and previousPath ~= SkynetIADSContact.DESCEND then
-		table.insert(self.simpleAltitudeProfile, SkynetIADSContact.DESCEND)
-	elseif self.position.p.y < currentAltitude and previousPath ~= SkynetIADSContact.CLIMB then
-		table.insert(self.simpleAltitudeProfile, SkynetIADSContact.CLIMB)
+	local dcsRep = self:getDCSRepresentation()
+	if dcsRep then
+		local position = dcsRep:getPosition()
+		if position and position.p and position.p.y and self.position and self.position.p and self.position.p.y then
+			local currentAltitude = position.p.y
+			
+			local previousPath = ""
+			if #self.simpleAltitudeProfile > 0 then
+				previousPath = self.simpleAltitudeProfile[#self.simpleAltitudeProfile]
+			end
+			
+			if self.position.p.y > currentAltitude and previousPath ~= SkynetIADSContact.DESCEND then
+				table.insert(self.simpleAltitudeProfile, SkynetIADSContact.DESCEND)
+			elseif self.position.p.y < currentAltitude and previousPath ~= SkynetIADSContact.CLIMB then
+				table.insert(self.simpleAltitudeProfile, SkynetIADSContact.CLIMB)
+			end
+		end
 	end
 end
 
@@ -3393,7 +3802,14 @@ function SkynetIADSJammer:getSuccessProbability(distanceNauticalMiles, natoName)
 end
 
 function SkynetIADSJammer:getDistanceNMToRadarUnit(radarUnit)
-	return mist.utils.metersToNM(mist.utils.get3DDist(self.emitter:getPosition().p, radarUnit:getPosition().p))
+	if self.emitter and radarUnit then
+		local emitterPos = self.emitter:getPosition()
+		local radarPos = radarUnit:getPosition()
+		if emitterPos and emitterPos.p and radarPos and radarPos.p then
+			return mist.utils.metersToNM(mist.utils.get3DDist(emitterPos.p, radarPos.p))
+		end
+	end
+	return 0
 end
 
 function SkynetIADSJammer.runCycle(self)
@@ -3428,10 +3844,16 @@ function SkynetIADSJammer.runCycle(self)
 end
 
 function SkynetIADSJammer:hasLineOfSightToRadar(radar)
-	local radarPos = radar:getPosition().p
-	--lift the radar 30 meters off the ground, some 3d models are dug in to the ground, creating issues in calculating LOS
-	radarPos.y = radarPos.y + 30
-	return land.isVisible(radarPos, self.emitter:getPosition().p) 
+	if radar and self.emitter then
+		local radarPos = radar:getPosition()
+		local emitterPos = self.emitter:getPosition()
+		if radarPos and radarPos.p and emitterPos and emitterPos.p then
+			--lift the radar 30 meters off the ground, some 3d models are dug in to the ground, creating issues in calculating LOS
+			radarPos.p.y = radarPos.p.y + 30
+			return land.isVisible(radarPos.p, emitterPos.p)
+		end
+	end
+	return false
 end
 
 function SkynetIADSJammer:masterArmSafe()
@@ -3440,9 +3862,14 @@ end
 
 --TODO: Remove Menu when emitter dies:
 function SkynetIADSJammer:addRadioMenu()
-	self.radioMenu = missionCommands.addSubMenu('Jammer: '..self.emitter:getName())
-	missionCommands.addCommand('Master Arm On', self.radioMenu, SkynetIADSJammer.updateMasterArm, {self = self, option = 'masterArmOn'})
-	missionCommands.addCommand('Master Arm Safe', self.radioMenu, SkynetIADSJammer.updateMasterArm, {self = self, option = 'masterArmSafe'})
+	if self.emitter then
+		local emitterName = self.emitter:getName()
+		if emitterName then
+			self.radioMenu = missionCommands.addSubMenu('Jammer: '..emitterName)
+			missionCommands.addCommand('Master Arm On', self.radioMenu, SkynetIADSJammer.updateMasterArm, {self = self, option = 'masterArmOn'})
+			missionCommands.addCommand('Master Arm Safe', self.radioMenu, SkynetIADSJammer.updateMasterArm, {self = self, option = 'masterArmSafe'})
+		end
+	end
 end
 
 function SkynetIADSJammer.updateMasterArm(params)
@@ -3523,13 +3950,25 @@ function SkynetIADSSAMSearchRadar:setFiringRangePercent(percent)
 end
 
 function SkynetIADSSAMSearchRadar:getDistance(target)
-	return mist.utils.get2DDist(target:getPosition().p, self:getDCSRepresentation():getPosition().p)
+	if target and self:getDCSRepresentation() then
+		local targetPos = target:getPosition()
+		local radarPos = self:getDCSRepresentation():getPosition()
+		if targetPos and targetPos.p and radarPos and radarPos.p then
+			return mist.utils.get2DDist(targetPos.p, radarPos.p)
+		end
+	end
+	return 0
 end
 
 function SkynetIADSSAMSearchRadar:getHeight(target)
-	local radarElevation = self:getDCSRepresentation():getPosition().p.y
-	local targetElevation = target:getPosition().p.y
-	return math.abs(targetElevation - radarElevation)
+	if target and self:getDCSRepresentation() then
+		local radarPos = self:getDCSRepresentation():getPosition()
+		local targetPos = target:getPosition()
+		if radarPos and radarPos.p and radarPos.p.y and targetPos and targetPos.p and targetPos.p.y then
+			return math.abs(targetPos.p.y - radarPos.p.y)
+		end
+	end
+	return 0
 end
 
 function SkynetIADSSAMSearchRadar:isInHorizontalRange(target)

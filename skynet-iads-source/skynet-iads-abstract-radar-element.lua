@@ -56,16 +56,17 @@ end
 
 --TODO: this method could be updated to only return Radar weapons fired, this way a SAM firing an IR weapon could go dark faster in the goDark() method
 function SkynetIADSAbstractRadarElement:weaponFired(event)
-	if event.id == world.event.S_EVENT_SHOT then
-		local weapon = event.weapon
-		local launcherFired = event.initiator
-		for i = 1, #self.launchers do
-			local launcher = self.launchers[i]
-			if launcher:getDCSRepresentation() == launcherFired then
-				table.insert(self.missilesInFlight, weapon)
-			end
-		end
-	end
+    if event.id == world.event.S_EVENT_SHOT then
+        local weapon = event.weapon
+        if not weapon then return end
+        local launcherFired = event.initiator
+        for i = 1, #self.launchers do
+            local launcher = self.launchers[i]
+            if launcher:getDCSRepresentation() == launcherFired then
+                table.insert(self.missilesInFlight, weapon)
+            end
+        end
+    end
 end
 
 function SkynetIADSAbstractRadarElement:setCachedTargetsMaxAge(maxAge)
@@ -255,15 +256,20 @@ end
 
 -- DCS does not send an event, when a missile is destroyed, so this method needs to be polled so that the missiles in flight are current, polling is done in the HARM Search call: evaluateIfTargetsContainHARMs
 function SkynetIADSAbstractRadarElement:updateMissilesInFlight()
-	local missilesInFlight = {}
-	for i = 1, #self.missilesInFlight do
-		local missile = self.missilesInFlight[i]
-		if missile:isExist() then
-			table.insert(missilesInFlight, missile)
-		end
-	end
-	self.missilesInFlight = missilesInFlight
-	self:goDarkIfOutOfAmmo()
+    local missilesInFlight = {}
+    for i = 1, #self.missilesInFlight do
+        local missile = self.missilesInFlight[i]
+        local exists = false
+        if missile and missile.isExist then
+            local ok, res = pcall(function() return missile:isExist() end)
+            exists = ok and res == true
+        end
+        if exists then
+            table.insert(missilesInFlight, missile)
+        end
+    end
+    self.missilesInFlight = missilesInFlight
+    self:goDarkIfOutOfAmmo()
 end
 
 function SkynetIADSAbstractRadarElement:goDarkIfOutOfAmmo()
@@ -297,9 +303,15 @@ end
 
 function SkynetIADSAbstractRadarElement:getUnitsToAnalyse()
 	local units = {}
-	table.insert(units, self:getDCSRepresentation())
-	if getmetatable(self:getDCSRepresentation()) == Group then
-		units = self:getDCSRepresentation():getUnits()
+	local dcsRep = self:getDCSRepresentation()
+	if dcsRep then
+		table.insert(units, dcsRep)
+		if getmetatable(dcsRep) == Group then
+			local groupUnits = dcsRep:getUnits()
+			if groupUnits then
+				units = groupUnits
+			end
+		end
 	end
 	return units
 end
@@ -461,7 +473,7 @@ end
 
 function SkynetIADSAbstractRadarElement:getController()
 	local dcsRepresentation = self:getDCSRepresentation()
-	if dcsRepresentation:isExist() then
+	if dcsRepresentation and dcsRepresentation:isExist() then
 		return dcsRepresentation:getController()
 	else
 		return nil
@@ -642,9 +654,17 @@ function SkynetIADSAbstractRadarElement:isInRadarDetectionRangeOf(abstractRadarE
 		for j = 1, #abstractRadarElementRadars do
 			local abstractRadarElementRadar = abstractRadarElementRadars[j]
 			if  abstractRadarElementRadar:isExist() and radar:isExist() then
-				local distance = self:getDistanceToUnit(radar:getDCSRepresentation():getPosition().p, abstractRadarElementRadar:getDCSRepresentation():getPosition().p)	
-				if abstractRadarElementRadar:getMaxRangeFindingTarget() >= distance then
-					return true
+				local radarDcsRep = radar:getDCSRepresentation()
+				local abstractRadarDcsRep = abstractRadarElementRadar:getDCSRepresentation()
+				if radarDcsRep and abstractRadarDcsRep then
+					local radarPos = radarDcsRep:getPosition()
+					local abstractRadarPos = abstractRadarDcsRep:getPosition()
+					if radarPos and radarPos.p and abstractRadarPos and abstractRadarPos.p then
+						local distance = self:getDistanceToUnit(radarPos.p, abstractRadarPos.p)	
+						if abstractRadarElementRadar:getMaxRangeFindingTarget() >= distance then
+							return true
+						end
+					end
 				end
 			end
 		end
@@ -777,7 +797,13 @@ function SkynetIADSAbstractRadarElement:getSecondsToImpact(distanceNM, speedKT)
 end
 
 function SkynetIADSAbstractRadarElement:getDistanceInMetersToContact(radarUnit, point)
-	return mist.utils.round(mist.utils.get3DDist(radarUnit:getPosition().p, point), 0)
+	if radarUnit then
+		local position = radarUnit:getPosition()
+		if position and position.p then
+			return mist.utils.round(mist.utils.get3DDist(position.p, point), 0)
+		end
+	end
+	return 0
 end
 
 function SkynetIADSAbstractRadarElement:calculateMinimalShutdownTimeInSeconds(timeToImpact)
@@ -790,7 +816,13 @@ end
 
 function SkynetIADSAbstractRadarElement:calculateImpactPoint(target, distanceInMeters)
 	-- distance needs to be incremented by a certain value for ip calculation to work, check why presumably due to rounding errors in the previous distance calculation
-	return land.getIP(target:getPosition().p, target:getPosition().x, distanceInMeters + 50)
+	if target then
+		local position = target:getPosition()
+		if position and position.p and position.x then
+			return land.getIP(position.p, position.x, distanceInMeters + 50)
+		end
+	end
+	return nil
 end
 
 function SkynetIADSAbstractRadarElement:shallReactToHARM()
@@ -814,22 +846,26 @@ function SkynetIADSAbstractRadarElement:informOfHARM(harmContact)
 		for j = 1, #radars do
 			local radar = radars[j]
 			if radar:isExist() then
-				local distanceNM =  mist.utils.metersToNM(self:getDistanceInMetersToContact(radar, harmContact:getPosition().p))
-				local harmToSAMHeading = mist.utils.toDegree(mist.utils.getHeadingPoints(harmContact:getPosition().p, radar:getPosition().p))
-				local harmToSAMAspect = self:calculateAspectInDegrees(harmContact:getMagneticHeading(), harmToSAMHeading)
-				local speedKT = harmContact:getGroundSpeedInKnots(0)
-				local secondsToImpact = self:getSecondsToImpact(distanceNM, speedKT)
-				--TODO: use tti instead of distanceNM?
-				-- when iterating through the radars, store shortest tti and work with that value??
-				if ( harmToSAMAspect < SkynetIADSAbstractRadarElement.HARM_TO_SAM_ASPECT and distanceNM < SkynetIADSAbstractRadarElement.HARM_LOOKAHEAD_NM ) then
-					self:addObjectIdentifiedAsHARM(harmContact)
-					if ( #self:getPointDefences() > 0 and self:pointDefencesGoLive() == true and self.iads:getDebugSettings().harmDefence ) then
-							self.iads:printOutputToLog("POINT DEFENCES GOING LIVE FOR: "..self:getDCSName().." | TTI: "..secondsToImpact)
-					end
-					--self.iads:printOutputToLog("Ignore HARM shutdown: "..tostring(self:shallIgnoreHARMShutdown()))
-					if ( self:getIsAPointDefence() == false and ( self:isDefendingHARM() == false or ( self:getHARMShutdownTime() < secondsToImpact ) ) and self:shallIgnoreHARMShutdown() == false) then
-						self:goSilentToEvadeHARM(secondsToImpact)
-						break
+				local harmContactPos = harmContact:getPosition()
+				local radarPos = radar:getPosition()
+				if harmContactPos and harmContactPos.p and radarPos and radarPos.p then
+					local distanceNM =  mist.utils.metersToNM(self:getDistanceInMetersToContact(radar, harmContactPos.p))
+					local harmToSAMHeading = mist.utils.toDegree(mist.utils.getHeadingPoints(harmContactPos.p, radarPos.p))
+					local harmToSAMAspect = self:calculateAspectInDegrees(harmContact:getMagneticHeading(), harmToSAMHeading)
+					local speedKT = harmContact:getGroundSpeedInKnots(0)
+					local secondsToImpact = self:getSecondsToImpact(distanceNM, speedKT)
+					--TODO: use tti instead of distanceNM?
+					-- when iterating through the radars, store shortest tti and work with that value??
+					if ( harmToSAMAspect < SkynetIADSAbstractRadarElement.HARM_TO_SAM_ASPECT and distanceNM < SkynetIADSAbstractRadarElement.HARM_LOOKAHEAD_NM ) then
+						self:addObjectIdentifiedAsHARM(harmContact)
+						if ( #self:getPointDefences() > 0 and self:pointDefencesGoLive() == true and self.iads:getDebugSettings().harmDefence ) then
+								self.iads:printOutputToLog("POINT DEFENCES GOING LIVE FOR: "..self:getDCSName().." | TTI: "..secondsToImpact)
+						end
+						--self.iads:printOutputToLog("Ignore HARM shutdown: "..tostring(self:shallIgnoreHARMShutdown()))
+						if ( self:getIsAPointDefence() == false and ( self:isDefendingHARM() == false or ( self:getHARMShutdownTime() < secondsToImpact ) ) and self:shallIgnoreHARMShutdown() == false) then
+							self:goSilentToEvadeHARM(secondsToImpact)
+							break
+						end
 					end
 				end
 			end

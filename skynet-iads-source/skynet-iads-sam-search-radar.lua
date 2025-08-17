@@ -61,13 +61,25 @@ function SkynetIADSSAMSearchRadar:setFiringRangePercent(percent)
 end
 
 function SkynetIADSSAMSearchRadar:getDistance(target)
-	return mist.utils.get2DDist(target:getPosition().p, self:getDCSRepresentation():getPosition().p)
+	if target and self:getDCSRepresentation() then
+		local targetPos = target:getPosition()
+		local radarPos = self:getDCSRepresentation():getPosition()
+		if targetPos and targetPos.p and radarPos and radarPos.p then
+			return mist.utils.get2DDist(targetPos.p, radarPos.p)
+		end
+	end
+	return 0
 end
 
 function SkynetIADSSAMSearchRadar:getHeight(target)
-	local radarElevation = self:getDCSRepresentation():getPosition().p.y
-	local targetElevation = target:getPosition().p.y
-	return math.abs(targetElevation - radarElevation)
+	if target and self:getDCSRepresentation() then
+		local radarPos = self:getDCSRepresentation():getPosition()
+		local targetPos = target:getPosition()
+		if radarPos and radarPos.p and radarPos.p.y and targetPos and targetPos.p and targetPos.p.y then
+			return math.abs(targetPos.p.y - radarPos.p.y)
+		end
+	end
+	return 0
 end
 
 function SkynetIADSSAMSearchRadar:isInHorizontalRange(target)

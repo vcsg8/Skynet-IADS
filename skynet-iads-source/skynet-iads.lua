@@ -45,7 +45,14 @@ function SkynetIADS:setCoalition(item)
 			self.coalitionID = coalitionID
 		end
 		if self.coalitionID ~= coalitionID then
-			self:printOutputToLog("element: "..item:getName().." has a different coalition than the IADS", true)
+			local itemName = "UNKNOWN"
+			if item and item:isExist() then
+				local name = item:getName()
+				if name then
+					itemName = name
+				end
+			end
+			self:printOutputToLog("element: "..itemName.." has a different coalition than the IADS", true)
 		end
 	end
 end
@@ -99,8 +106,8 @@ function SkynetIADS:addEarlyWarningRadarsByPrefix(prefix)
 	for unitName, unit in pairs(mist.DBs.unitsByName) do
 		local pos = self:findSubString(unitName, prefix)
 		--somehow the MIST unit db contains StaticObject, we check to see we only add Units
-		local unit = Unit.getByName(unitName)
-		if pos and pos == 1 and unit then
+		local unitObj = mist.safeGetUnitByName(unitName)
+		if pos and pos == 1 and unitObj then
 			self:addEarlyWarningRadar(unitName)
 		end
 	end
@@ -115,11 +122,20 @@ function SkynetIADS:addEarlyWarningRadar(earlyWarningRadarUnitName)
 	end
 	self:setCoalition(earlyWarningRadarUnit)
 	local ewRadar = nil
-	local category = earlyWarningRadarUnit:getDesc().category
-	if category == Unit.Category.AIRPLANE or category == Unit.Category.SHIP then
-		ewRadar = SkynetIADSAWACSRadar:create(earlyWarningRadarUnit, self)
+	local desc = nil
+	if earlyWarningRadarUnit and earlyWarningRadarUnit:isExist() then
+		desc = earlyWarningRadarUnit:getDesc()
+	end
+	if desc and desc.category then
+		local category = desc.category
+		if category == Unit.Category.AIRPLANE or category == Unit.Category.SHIP then
+			ewRadar = SkynetIADSAWACSRadar:create(earlyWarningRadarUnit, self)
+		else
+			ewRadar = SkynetIADSEWRadar:create(earlyWarningRadarUnit, self)
+		end
 	else
-		ewRadar = SkynetIADSEWRadar:create(earlyWarningRadarUnit, self)
+		self:printOutputToLog("EW Radar has no valid description or category: "..earlyWarningRadarUnitName, true)
+		return
 	end
 	ewRadar:setupElements()
 	ewRadar:setCachedTargetsMaxAge(self:getCachedTargetsMaxAge())	
@@ -165,9 +181,12 @@ function SkynetIADS:addSAMSitesByPrefix(prefix)
 		local pos = self:findSubString(groupName, prefix)
 		if pos and pos == 1 then
 			--mist returns groups, units and, StaticObjects
-			local dcsObject = Group.getByName(groupName)
-			if dcsObject and dcsObject:getUnits()[1]:isActive() then
+			local dcsObject = mist.safeGetGroupByName(groupName)
+			if dcsObject then
+				local units = dcsObject:getUnits()
+				if units and units[1] and units[1]:isActive() then
 				self:addSAMSite(groupName)
+				end
 			end
 		end
 	end
@@ -188,7 +207,7 @@ function SkynetIADS:getSAMSitesByPrefix(prefix)
 end
 
 function SkynetIADS:addSAMSite(samSiteName)
-	local samSiteDCS = Group.getByName(samSiteName)
+	local samSiteDCS = mist.safeGetGroupByName(samSiteName)
 	if samSiteDCS == nil then
 		self:printOutputToLog("you have added an SAM Site that does not exist, check name of Group in Setup and Mission editor: "..tostring(samSiteName), true)
 		return
@@ -348,7 +367,10 @@ function SkynetIADS.evaluateContacts(self)
 			-- the DCS Radar only returns enemy aircraft, if that should change a coalition check will be required
 			-- currently every type of object in the air is handed of to the SAM site, including missiles
 			local description = contact:getDesc()
-			local category = description.category
+			local category = nil
+			if description and description.category then
+				category = description.category
+			end
 			if category and category ~= Unit.Category.GROUND_UNIT and category ~= Unit.Category.SHIP and category ~= Unit.Category.STRUCTURE then
 				samToTrigger:informOfContact(contact)
 			end
@@ -499,7 +521,9 @@ function SkynetIADS:mergeContact(contact)
 	local existingContact = false
 	for i = 1, #self.contacts do
 		local iadsContact = self.contacts[i]
-		if iadsContact:getName() == contact:getName() then
+		local iadsContactName = iadsContact:getName()
+		local contactName = contact:getName()
+		if iadsContactName and contactName and iadsContactName == contactName then
 			iadsContact:refresh()
 			--these contacts are used in the logger we set a kown harm state of a contact coming from a SAM site. So the logger will show them als HARMs
 			contact:setHARMState(iadsContact:getHARMState())

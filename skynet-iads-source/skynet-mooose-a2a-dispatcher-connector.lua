@@ -29,7 +29,16 @@ function SkynetMooseA2ADispatcherConnector:getEarlyWarningRadarGroupNames()
 		local ewRadars = self.iadsCollection[i]:getUsableEarlyWarningRadars()
 		for j = 1, #ewRadars do
 			local ewRadar = ewRadars[j]
-			table.insert(self.ewRadarGroupNames, ewRadar:getDCSRepresentation():getGroup():getName())
+			local dcsRep = ewRadar:getDCSRepresentation()
+			if dcsRep then
+				local group = dcsRep:getGroup()
+				if group then
+					local groupName = group:getName()
+					if groupName then
+						table.insert(self.ewRadarGroupNames, groupName)
+					end
+				end
+			end
 		end
 	end
 	return self.ewRadarGroupNames
